@@ -3449,6 +3449,20 @@ async function signOutUser() {
 }
 
 /* ---------- sauvegarde ---------- */
+/* Firestore refuse les valeurs undefined : on nettoie l'objet avant l'envoi */
+function cleanData(v) {
+  if (Array.isArray(v)) return v.map(cleanData);
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const k of Object.keys(v)) {
+      const val = cleanData(v[k]);
+      if (val !== undefined) out[k] = val;
+    }
+    return out;
+  }
+  return v;
+}
+
 function saveCloud(manual) {
   if (!FB.user || FB.status !== 'ready') return;
   const snap = appApi().snapshot();
@@ -3460,11 +3474,11 @@ function saveCloud(manual) {
   const base = F.collection(FB.db, 'users', FB.user.uid, 'projets');
   const id = FB.docId || appApi().getCloudId();
   const ref = id ? F.doc(base, id) : F.doc(base);
-  const payload = Object.assign({}, snap, {
+  const payload = cleanData(Object.assign({}, snap, {
     name: (snap.project && snap.project.name) || 'Projet',
-    updatedAt: F.serverTimestamp(),
     schema: 1
-  });
+  }));
+  payload.updatedAt = F.serverTimestamp();
   F.setDoc(ref, payload, { merge: false }).then(() => {
     FB.docId = ref.id;
     appApi().setCloudId(ref.id);
