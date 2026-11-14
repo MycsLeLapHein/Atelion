@@ -146,3 +146,17 @@ users/{uid}/projets/{projetId}
 - La `apiKey` Firebase n'est **pas** un secret : elle identifie le projet, elle ne donne aucun droit.
   Ce sont les **règles Firestore** qui protègent les données (étape 5).
 - La configuration est visible dans le fichier : c'est normal pour une application web Firebase.
+- Cette clé est en plus **restreinte** (Google Cloud → *API et services → Identifiants → Browser key*) :
+
+  | Type de restriction | Valeur |
+  |---|---|
+  | Restrictions relatives aux applications | **Sites Web** |
+  | Référents autorisés | `http://localhost:8000/*` et `https://atelion-5b5f1.web.app/*` |
+
+  ⚠️ **Si tu ajoutes un jour un autre domaine** (GitHub Pages, nom de domaine perso…), il faut
+  l'ajouter dans cette liste, sinon les appels Firebase seront refusés (`requests from referer <> are blocked`).
+  Et pour le développement local, ouvre l'appli via `http://localhost:8000/...` et non `http://127.0.0.1:8000/...`
+  (ce sont deux origines différentes pour Google).
+- GitHub peut signaler la clé comme « secret exposé » dans un dépôt public : c'est un faux positif
+  pour Firebase. Il suffit de classer l'alerte (onglet *Security → Secret scanning*).
+
