@@ -1,0 +1,11 @@
+﻿# Systeme / editeurs
+Thumbs.db
+desktop.ini
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Firebase CLI
+.firebase/
+firebase-debug.log
