@@ -433,6 +433,7 @@ input[type=text]:focus,input[type=date]:focus,select:focus{border-color:var(--ac
           <button class="btn" data-cam="iso" title="Vue isométrique">Iso</button>
           <button class="btn" data-cam="top" title="Vue de dessus">Dessus</button>
           <button class="btn" data-cam="front" title="Vue de face">Face</button>
+          <button class="btn" id="grabTgl" title="Attraper les panneaux à la souris (cliquer-glisser). Désactivé : le glissement tourne la caméra.">✋ Panneaux : on</button>
           <button class="btn" id="camFit" title="Recadrer la scène">Recadrer</button>
         </div>
         <div class="hint" id="hint3d">Glisser = tourner · Maj + glisser = déplacer · molette = zoom</div>
@@ -1111,6 +1112,7 @@ const state = {
   showLabels: true,
   shadows: true,
   edges: true,
+  grabPanels: true,
   view2d: { ox: 0, oy: 0, zoom: 1 },
   cam: { yaw: 0.72, pitch: 0.42, dist: 900, target: { x: 200, y: 60, z: 150 } },
   guides: [],
@@ -1119,6 +1121,7 @@ const state = {
 };
 
 function curItem() { return state.items.find(i => i.id === state.sel) || null; }
+let paintGrab = null;
 function colorOf(it) { return (COLOR_MAP[it.color] || COLOR_MAP.chene).hex; }
 
 /* ---------- géométrie d'un élément (local -> pièces) ---------- */
@@ -1159,6 +1162,27 @@ function outward(q, cen) {
   return n;
 }
 
+/* découpe une grande face en morceaux : le tri « du plus loin au plus près »
+   reste juste, donc une planche ne passe plus devant/derrière une autre par erreur */
+function splitQuad(q) {
+  const A = q[0], B = q[1], C = q[2], D = q[3];
+  const d1 = Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z);
+  const d2 = Math.hypot(D.x - A.x, D.y - A.y, D.z - A.z);
+  const size = Math.max(d1, d2);
+  const n = size > 170 ? 3 : size > 70 ? 2 : 1;
+  if (n === 1) return [q];
+  const lp = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t });
+  const at = (u, v) => lp(lp(A, B, u), lp(D, C, u), v);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const u0 = i / n, u1 = (i + 1) / n, v0 = j / n, v1 = (j + 1) / n;
+      out.push([at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)]);
+    }
+  }
+  return out;
+}
+
 function itemGeometry(it) {
   const parts = getParts(it);
   const c = Math.cos(it.rot * RAD), s = Math.sin(it.rot * RAD);
@@ -1175,8 +1199,8 @@ function itemGeometry(it) {
       const cen = Wp((p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2, (p.z0 + p.z1) / 2);
       const quads = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [3, 2, 6, 7], [0, 4, 7, 3], [1, 2, 6, 5]];
       for (const qi of quads) {
-        const q = [P[qi[0]], P[qi[1]], P[qi[2]], P[qi[3]]];
-        out.push({ q, n: outward(q, cen), hex, m: p.m, pn: p.pn });
+        const q0 = [P[qi[0]], P[qi[1]], P[qi[2]], P[qi[3]]];
+        for (const q of splitQuad(q0)) out.push({ q, n: outward(q, cen), hex, m: p.m, pn: p.pn });
       }
     } else {
       const N = 18, r = p.r;
@@ -1231,6 +1255,46 @@ function proj(cam, p) {
 const LIGHT1 = norm({ x: -0.42, y: 0.88, z: 0.52 });
 const LIGHT2 = norm({ x: 0.62, y: 0.34, z: -0.68 });
 
+/* coupe un polygone 3D contre le plan proche de la caméra :
+   une face à cheval sur la caméra est tronquée au lieu de disparaître */
+function clipNear(q, cam) {
+  const NEAR = 2.2;
+  const zof = p => (p.x - cam.eye.x) * cam.fwd.x + (p.y - cam.eye.y) * cam.fwd.y + (p.z - cam.eye.z) * cam.fwd.z;
+  const out = [];
+  for (let i = 0; i < q.length; i++) {
+    const a = q[i], b = q[(i + 1) % q.length];
+    const za = zof(a), zb = zof(b);
+    const inA = za >= NEAR, inB = zb >= NEAR;
+    if (inA) out.push(a);
+    if (inA !== inB) {
+      const t = (NEAR - za) / (zb - za);
+      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t });
+    }
+  }
+  return out;
+}
+
+/* polygone 3D -> points écran (avec découpe au plan proche) */
+function polyScreen(cam, q) {
+  let sp = [];
+  for (const p of q) {
+    const s = proj(cam, p);
+    if (!s) { sp = null; break; }
+    sp.push(s);
+  }
+  if (sp) return sp;
+  const cq = clipNear(q, cam);
+  if (cq.length < 3) return null;
+  sp = [];
+  for (const p of cq) {
+    const s = proj(cam, p);
+    if (!s) return null;
+    sp.push(s);
+  }
+  return sp.length >= 3 ? sp : null;
+}
+
+
 function sceneBounds() {
   const b = { x0: 0, x1: state.room.w, z0: 0, z1: state.room.d, y1: Math.max(60, state.room.h * 0.6) };
   for (const it of state.items) {
@@ -1261,22 +1325,22 @@ function render3D(ctx, W, H, opt) {
   if (!opt.simple) {
     /* sol d'atelier */
     const m = 260;
-    const gq = [
+    const gq = polyScreen(cam, [
       { x: -m, y: 0, z: -m }, { x: state.room.w + m, y: 0, z: -m },
       { x: state.room.w + m, y: 0, z: state.room.d + m }, { x: -m, y: 0, z: state.room.d + m }
-    ].map(p => proj(cam, p));
-    if (gq.every(Boolean)) {
+    ]);
+    if (gq) {
       ctx.beginPath(); ctx.moveTo(gq[0][0], gq[0][1]);
       for (let i = 1; i < 4; i++) ctx.lineTo(gq[i][0], gq[i][1]);
       ctx.closePath();
       ctx.fillStyle = '#e2d9c9'; ctx.fill();
     }
     /* dalle de la pièce */
-    const rq = [
+    const rq = polyScreen(cam, [
       { x: 0, y: 0, z: 0 }, { x: state.room.w, y: 0, z: 0 },
       { x: state.room.w, y: 0, z: state.room.d }, { x: 0, y: 0, z: state.room.d }
-    ].map(p => proj(cam, p));
-    if (rq.every(Boolean)) {
+    ]);
+    if (rq) {
       ctx.beginPath(); ctx.moveTo(rq[0][0], rq[0][1]);
       for (let i = 1; i < 4; i++) ctx.lineTo(rq[i][0], rq[i][1]);
       ctx.closePath();
@@ -1322,9 +1386,8 @@ function render3D(ctx, W, H, opt) {
       for (const p of q) { cx += p.x; cy += p.y; cz += p.z; }
       const n = q.length; cx /= n; cy /= n; cz /= n;
       if (f.n.x * (eye.x - cx) + f.n.y * (eye.y - cy) + f.n.z * (eye.z - cz) <= 0.001) continue;
-      const sp = []; let ok = true;
-      for (const p of q) { const s2 = proj(cam, p); if (!s2) { ok = false; break; } sp.push(s2); }
-      if (!ok) continue;
+      const sp = polyScreen(cam, q);
+      if (!sp) continue;
       let zs = 0; for (const s2 of sp) zs += s2[2];
       faces.push({ sp, z: zs / sp.length, n: f.n, hex: f.hex, m: f.m });
     }
@@ -2818,7 +2881,7 @@ function bind3D() {
       return;
     }
     /* clic gauche simple : on essaie d'attraper un panneau du meuble sur mesure */
-    if (e.button === 0 && !e.shiftKey && !e.altKey) {
+    if (e.button === 0 && state.grabPanels !== false && !e.shiftKey && !e.altKey) {
       const coarse = e.pointerType !== 'mouse';
       const rect = cvs.getBoundingClientRect();
       const hit = pickPanel3D(cvs, e.clientX - rect.left, e.clientY - rect.top);
@@ -2928,6 +2991,12 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
   if (e.key === 'Escape') { if ($('#modal').classList.contains('open')) closeModal(); else select(null); return; }
   if (k === 'f') { fit2D(); return; }
+  if (k === 'p' && !e.ctrlKey && !e.metaKey) {
+    state.grabPanels = state.grabPanels === false;
+    if (paintGrab) paintGrab();
+    draw();
+    return;
+  }
   if (k === '3') { setView('3d'); return; }
   if (k === '2') { setView('2d'); return; }
   const it = curItem();
@@ -3034,6 +3103,20 @@ function bindPanel() {
   $('#zFit').addEventListener('click', () => fit2D());
   $('#btnFit2d').addEventListener('click', () => fit2D());
   $('#camFit').addEventListener('click', () => fit3D());
+  const gt = $('#grabTgl');
+  if (gt) {
+    paintGrab = () => {
+      gt.textContent = state.grabPanels === false ? '✋ Panneaux : off' : '✋ Panneaux : on';
+      gt.classList.toggle('on', state.grabPanels !== false);
+      gt.style.opacity = state.grabPanels === false ? '.55' : '';
+    };
+    gt.addEventListener('click', () => {
+      state.grabPanels = state.grabPanels === false;
+      paintGrab();
+      draw();
+    });
+    paintGrab();
+  }
   $$('#pane3d [data-cam]').forEach(b => b.addEventListener('click', () => {
     const v = b.dataset.cam;
     if (v === 'iso') { state.cam.yaw = 0.72; state.cam.pitch = 0.42; }
@@ -3225,6 +3308,7 @@ function helpHtml() {
     '<li>Les champs du panneau de droite sont modifiables : les paramètres (portes, tiroirs, étagères, épaisseurs) reconstruisent le meuble.</li>' +
     '<li><b>Meuble sur mesure</b> (catégorie Structures) : le meuble se compose <b>panneau par panneau</b> — joues, dessus, dessous, fond, tablettes, portes, pieds ou panneau libre. Chaque panneau a sa longueur, sa largeur, son épaisseur et sa position en cm ; l’encombrement du meuble se calcule tout seul.</li>' +
     '<li><b>Déplacer un panneau à la souris (vue 3D)</b> : clique sur une joue, un dessous, une tablette… et fais-la glisser. Elle suit le geste sur l’axe le plus naturel (elle glisse, elle ne pivote pas) et se <b>colle toute seule</b> aux faces voisines et au sol (aimant de 0,9 cm). <b>Alt</b> = sans aimant ni arrondi. Sur mobile : touche une fois pour sélectionner le meuble, puis fais glisser.</li>' +
+    '<li><b>✋ Panneaux : on / off</b> (bouton dans la vue 3D, ou touche <b>P</b>) : sur « off », le clic-glisser ne prend plus les panneaux et tourne simplement la caméra. Pratique pour visiter le meuble sans rien déplacer par erreur.</li>' +
     '<li><b>Coller un panneau au bord</b> : panneau sélectionné → boutons <b>◀ Gauche / Droite ▶</b> (ou Dessous / Dessus, Fond / Avant selon son orientation). Les panneaux déjà collés aux bords suivent automatiquement quand l’encombrement change.</li>' +
     '<li>Une poignée au-dessus de la sélection permet de faire pivoter librement (pas de 5°).</li>' +
     '<li>Les cotes affichées sur le plan sont celles du meuble sélectionné.</li>' +
