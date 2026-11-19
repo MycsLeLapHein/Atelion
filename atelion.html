@@ -967,11 +967,9 @@ function customDefaults(w, h, d, t) {
     newPanel('Dessous', 'XZ', w - 2 * t, d, t, 0, t / 2, 0)
   ];
 }
-function customBounds(it) {
-  const ps = (it.params && it.params.panels) || [];
-  if (!ps.length) return null;
+function boundsOf(panels) {
   let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, z0 = 1e9, z1 = -1e9;
-  for (const pn of ps) {
+  for (const pn of panels || []) {
     const b = panelBox(pn);
     if (!b) continue;
     x0 = Math.min(x0, b.x0); x1 = Math.max(x1, b.x1);
@@ -980,6 +978,11 @@ function customBounds(it) {
   }
   if (x0 > x1) return null;
   return { x0, x1, y0, y1, z0, z1 };
+}
+function customBounds(it) {
+  const ps = (it.params && it.params.panels) || [];
+  if (!ps.length) return null;
+  return boundsOf(ps);
 }
 /* recadre les panneaux : bas du meuble à 0, centre au milieu du plan */
 function normalizeCustom(it) {
@@ -1904,6 +1907,9 @@ function customEditorHtml(it) {
     '<span class="pdim">' + num(pn.L) + '×' + num(pn.W) + '×' + num(pn.E) + '</span>' +
     '</div>').join('') : '<p class="empty" style="padding:6px">Aucun panneau : commencez par en ajouter un.</p>';
   const cur = ps[panelSel];
+  const edgeLbl = cur
+    ? (cur.plane === 'ZY' ? ['Gauche', 'Droite'] : cur.plane === 'XZ' ? ['Dessous', 'Dessus'] : ['Fond', 'Avant'])
+    : ['Gauche', 'Droite'];
   let edit = '';
   if (cur) {
     const orient = [
@@ -1925,6 +1931,10 @@ function customEditorHtml(it) {
       '<div class="btnrow" style="margin-top:6px">' +
       '<button class="btn small" data-pact="turn" title="Bascule la planche d’un quart de tour (face ↔ côté)">Tourner 90°</button>' +
       '<button class="btn small" data-pact="dup">Dupliquer</button>' +
+      '</div>' +
+      '<div class="btnrow" style="margin-top:5px">' +
+      '<button class="btn small" data-pact="edge0" title="Colle le panneau contre le bord du meuble">◀ ' + edgeLbl[0] + '</button>' +
+      '<button class="btn small" data-pact="edge1" title="Colle le panneau contre le bord du meuble">' + edgeLbl[1] + ' ▶</button>' +
       '</div>' +
       '<div class="btnrow" style="margin-top:5px">' +
       '<button class="btn small" data-pact="center">Centrer</button>' +
@@ -1975,6 +1985,64 @@ function snapPanelEdges(it, pn) {
   if (dz !== null) pn.z = r1(pn.z + dz);
 }
 
+/* colle le panneau contre le bord du meuble, dans l'axe de son épaisseur :
+   side -1 = gauche / fond / dessous, side +1 = droite / avant / dessus */
+function flushPanel(it, pn, side) {
+  if (!it || !pn) return false;
+  const others = (it.params.panels || []).filter(p => p !== pn);
+  const b = boundsOf(others) || customBounds(it);
+  const pb = panelBox(pn);
+  if (!b || !pb) return false;
+  if (pn.plane === 'ZY') {          /* épaisseur en X : joue */
+    const ext = pb.x1 - pb.x0;
+    pn.x = r1(side < 0 ? b.x0 + ext / 2 : b.x1 - ext / 2);
+  } else if (pn.plane === 'XZ') {   /* épaisseur en Y : dessus / dessous / tablette */
+    const ext = pb.y1 - pb.y0;
+    pn.y = r1(side < 0 ? b.y0 + ext / 2 : b.y1 - ext / 2);
+  } else {                          /* épaisseur en Z : fond / porte */
+    const ext = pb.z1 - pb.z0;
+    pn.z = r1(side < 0 ? b.z0 + ext / 2 : b.z1 - ext / 2);
+  }
+  return true;
+}
+
+/* champ qui porte l'étirement d'un panneau dans un axe (null = c'est son épaisseur) */
+function extField(pn, axis) {
+  if (axis === 'x') return pn.plane === 'ZY' ? null : 'L';
+  return pn.plane === 'XY' ? null : (pn.plane === 'ZY' ? 'L' : 'W');
+}
+
+/* les panneaux collés à une face suivent quand cette face bouge
+   (ex. : on élargit le dessus → les joues vont se recoller aux nouveaux bords ;
+   un panneau qui touche les deux faces est étiré au lieu d'être décalé) */
+function reflowGlued(it, b0, skipPn) {
+  const ps = (it.params && it.params.panels) || [];
+  if (!b0 || ps.length < 2) return;
+  const b1 = customBounds(it);
+  if (!b1) return;
+  const EPS = 0.4;
+  const dx0 = b1.x0 - b0.x0, dx1 = b1.x1 - b0.x1;
+  const dz0 = b1.z0 - b0.z0, dz1 = b1.z1 - b0.z1;
+  if (!dx0 && !dx1 && !dz0 && !dz1) return;
+  for (const pn of ps) {
+    if (pn === skipPn) continue;
+    const b = panelBox(pn);
+    if (!b) continue;
+    const atX0 = Math.abs(b.x0 - b0.x0) < EPS, atX1 = Math.abs(b.x1 - b0.x1) < EPS;
+    if (atX0 && atX1 && (dx1 - dx0)) {
+      const f = extField(pn, 'x');
+      if (f) { pn[f] = r1(pn[f] + (dx1 - dx0)); pn.x = r1(pn.x + (dx0 + dx1) / 2); }
+    } else if (atX0 && dx0) pn.x = r1(pn.x + dx0);
+    else if (atX1 && dx1) pn.x = r1(pn.x + dx1);
+    const atZ0 = Math.abs(b.z0 - b0.z0) < EPS, atZ1 = Math.abs(b.z1 - b0.z1) < EPS;
+    if (atZ0 && atZ1 && (dz1 - dz0)) {
+      const f = extField(pn, 'z');
+      if (f) { pn[f] = r1(pn[f] + (dz1 - dz0)); pn.z = r1(pn.z + (dz0 + dz1) / 2); }
+    } else if (atZ0 && dz0) pn.z = r1(pn.z + dz0);
+    else if (atZ1 && dz1) pn.z = r1(pn.z + dz1);
+  }
+}
+
 function bindCustomEditor(it) {
   const ps = () => (it.params.panels = Array.isArray(it.params.panels) ? it.params.panels : []);
 
@@ -2001,7 +2069,8 @@ function bindCustomEditor(it) {
 
   $$('#selBody [data-pn]').forEach(inp => {
     const key = inp.dataset.pn;
-    inp.addEventListener('focus', beginEdit);
+    let b0 = null;
+    inp.addEventListener('focus', () => { beginEdit(); b0 = customBounds(it); });
     inp.addEventListener('input', () => {
       const v = parseFloat(String(inp.value).replace(',', '.'));
       const pn = ps()[panelSel];
@@ -2014,7 +2083,8 @@ function bindCustomEditor(it) {
     });
     inp.addEventListener('change', () => {
       const pn = ps()[panelSel];
-      if (pn) snapPanelEdges(it, pn);
+      if (pn) { snapPanelEdges(it, pn); reflowGlued(it, b0, pn); }
+      b0 = null;
       normalizeCustom(it);
       endEdit();
       renderSel(); draw(); renderTotals(); autosave();
@@ -2060,6 +2130,8 @@ function bindCustomEditor(it) {
       if (panelSel > 0) panelSel--;
     } else if (act === 'center') {
       pn.x = 0; pn.z = 0;
+    } else if (act === 'edge0' || act === 'edge1') {
+      flushPanel(it, pn, act === 'edge0' ? -1 : 1);
     } else if (act === 'turn') {
       if (pn.plane === 'XY') pn.plane = 'ZY';
       else if (pn.plane === 'ZY') pn.plane = 'XY';
@@ -2076,7 +2148,11 @@ function addPanelQuick(kind) {
   if (!it || it.type !== 'surMesure') return;
   const ps = (it.params.panels = Array.isArray(it.params.panels) ? it.params.panels : []);
   const t = +(it.params.t || 1.8);
-  const w = Math.max(2, it.w), h = Math.max(2, it.h), d = Math.max(2, it.d);
+  /* on se cale sur l'encombrement réel des panneaux déjà posés */
+  const bb = ps.length ? boundsOf(ps) : null;
+  const w = Math.max(2, bb ? r1(bb.x1 - bb.x0) : it.w);
+  const h = Math.max(2, bb ? r1(bb.y1 - bb.y0) : it.h);
+  const d = Math.max(2, bb ? r1(bb.z1 - bb.z0) : it.d);
   beginEdit();
   if (kind === 'vider') {
     it.params.panels = [];
