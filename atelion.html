@@ -1164,6 +1164,7 @@ function outward(q, cen) {
 
 /* découpe une grande face en morceaux : le tri « du plus loin au plus près »
    reste juste, donc une planche ne passe plus devant/derrière une autre par erreur */
+let _faceGid = 0;
 function splitQuad(q) {
   const A = q[0], B = q[1], C = q[2], D = q[3];
   const d1 = Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z);
@@ -1200,7 +1201,8 @@ function itemGeometry(it) {
       const quads = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [3, 2, 6, 7], [0, 4, 7, 3], [1, 2, 6, 5]];
       for (const qi of quads) {
         const q0 = [P[qi[0]], P[qi[1]], P[qi[2]], P[qi[3]]];
-        for (const q of splitQuad(q0)) out.push({ q, n: outward(q, cen), hex, m: p.m, pn: p.pn });
+        const gid = ++_faceGid;
+        for (const q of splitQuad(q0)) out.push({ q, n: outward(q, cen), hex, m: p.m, pn: p.pn, gid });
       }
     } else {
       const N = 18, r = p.r;
@@ -1389,10 +1391,18 @@ function render3D(ctx, W, H, opt) {
       const sp = polyScreen(cam, q);
       if (!sp) continue;
       let zs = 0; for (const s2 of sp) zs += s2[2];
-      faces.push({ sp, z: zs / sp.length, n: f.n, hex: f.hex, m: f.m });
+      faces.push({ sp, z: zs / sp.length, n: f.n, hex: f.hex, m: f.m, gid: f.gid });
     }
   }
-  faces.sort((a, b) => b.z - a.z);
+  /* on trie par GROUPE (une face découpée reste d'un seul bloc) : plus de trous
+     à l'intérieur d'une planche, et l'ordre entre planches reste fin */
+  const gsum = new Map(), gcnt = new Map();
+  for (const f of faces) {
+    gsum.set(f.gid, (gsum.get(f.gid) || 0) + f.z);
+    gcnt.set(f.gid, (gcnt.get(f.gid) || 0) + 1);
+  }
+  for (const f of faces) f.gz = gsum.get(f.gid) / gcnt.get(f.gid);
+  faces.sort((a, b) => (b.gz - a.gz) || (b.z - a.z));
   const withEdges = state.edges;
   for (const f of faces) {
     const k = f.m * (0.47 + 0.49 * Math.max(0, dot(f.n, LIGHT1)) + 0.14 * Math.max(0, dot(f.n, LIGHT2)));
@@ -2803,13 +2813,13 @@ function pickPanel3D(cvs, cx, cy) {
       let zs = 0;
       for (const s of sp) zs += s[2];
       const z = zs / sp.length;
-      if (!bestI || z < bestI.z) bestI = { it, id: null, z };
-      if (f.pn && Array.isArray((it.params || {}).panels)) {
-        if (!bestP || z < bestP.z - 0.5) bestP = { it, id: f.pn, z };
+      if (!bestI || z < bestI.z) {
+        const hasPanel = f.pn && Array.isArray((it.params || {}).panels);
+        bestI = { it, id: hasPanel ? f.pn : null, z };
       }
     }
   }
-  return bestP || bestI;
+  return bestI;
 }
 
 /* point du sol (plan horizontal à la hauteur h) sous le curseur */
