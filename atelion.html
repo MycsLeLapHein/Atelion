@@ -1083,7 +1083,11 @@ D('surMesure', {
   label: 'Meuble sur mesure', cat: 'Sur mesure', rank: 0, color: 'chene',
   dims: { w: 100, h: 80, d: 50 },
   params: [{ key: 't', label: 'Épaisseur par défaut', min: 0.6, max: 5, step: 0.1, def: 1.8, unit: 'cm' }],
-  build: P => (Array.isArray(P.panels) ? P.panels : []).map(panelBox).filter(Boolean)
+  build: P => (Array.isArray(P.panels) ? P.panels : []).map(pn => {
+    const b = panelBox(pn);
+    if (b) b.pn = pn.id;
+    return b;
+  }).filter(Boolean)
 });
 
 const CATS = ['Sur mesure', 'Rangements', 'Tables & assises', 'Cuisine', 'Chambre', 'Structures'];
@@ -1172,7 +1176,7 @@ function itemGeometry(it) {
       const quads = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [3, 2, 6, 7], [0, 4, 7, 3], [1, 2, 6, 5]];
       for (const qi of quads) {
         const q = [P[qi[0]], P[qi[1]], P[qi[2]], P[qi[3]]];
-        out.push({ q, n: outward(q, cen), hex, m: p.m });
+        out.push({ q, n: outward(q, cen), hex, m: p.m, pn: p.pn });
       }
     } else {
       const N = 18, r = p.r;
@@ -2711,9 +2715,95 @@ function bind2D() {
   });
 }
 
+/* ---------- attraper un panneau à la souris dans la vue 3D ---------- */
+function inQuad(px, py, q) {
+  let inside = false;
+  for (let i = 0, j = q.length - 1; i < q.length; j = i++) {
+    const xi = q[i][0], yi = q[i][1], xj = q[j][0], yj = q[j][1];
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / ((yj - yi) || 1e-9) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+/* panneau sous le curseur (le plus proche de la caméra) ; à défaut, le meuble le plus proche */
+function pickPanel3D(cvs, cx, cy) {
+  const W = cvs.clientWidth || 800, H = cvs.clientHeight || 600;
+  const cam = makeCam(W, H);
+  let bestP = null, bestI = null;
+  for (const it of state.items) {
+    if (it.visible === false) continue;
+    for (const f of itemGeometry(it)) {
+      const sp = [];
+      let ok = true;
+      for (const p of f.q) { const s = proj(cam, p); if (!s) { ok = false; break; } sp.push(s); }
+      if (!ok || !inQuad(cx, cy, sp)) continue;
+      let zs = 0;
+      for (const s of sp) zs += s[2];
+      const z = zs / sp.length;
+      if (!bestI || z < bestI.z) bestI = { it, id: null, z };
+      if (f.pn && Array.isArray((it.params || {}).panels)) {
+        if (!bestP || z < bestP.z - 0.5) bestP = { it, id: f.pn, z };
+      }
+    }
+  }
+  return bestP || bestI;
+}
+
+/* axe local le plus aligné avec le geste (et conversion pixels -> cm) */
+function dragAxis3D(it, pn, cam, dx, dy) {
+  const c = Math.cos(it.rot * RAD), s = Math.sin(it.rot * RAD);
+  const cen = { x: it.x + (pn.x * c - pn.z * s), y: (it.z || 0) + pn.y, z: it.y + (pn.x * s + pn.z * c) };
+  const p0 = proj(cam, cen);
+  if (!p0) return null;
+  const axes = [
+    { k: 'x', v: { x: c, y: 0, z: s } },
+    { k: 'y', v: { x: 0, y: 1, z: 0 } },
+    { k: 'z', v: { x: -s, y: 0, z: c } }
+  ];
+  let best = null;
+  for (const a of axes) {
+    const p1 = proj(cam, { x: cen.x + a.v.x * 10, y: cen.y + a.v.y * 10, z: cen.z + a.v.z * 10 });
+    if (!p1) continue;
+    const sx = (p1[0] - p0[0]) / 10, sy = (p1[1] - p0[1]) / 10;
+    const n2 = sx * sx + sy * sy;
+    if (n2 < 0.02) continue;
+    const score = Math.abs(dx * sx + dy * sy) / Math.sqrt(n2);
+    if (!best || score > best.score) best = { k: a.k, sx, sy, n2, score };
+  }
+  return best;
+}
+
+/* aimantation le long de l'axe déplacé (faces des autres panneaux, et le sol en Y) */
+function snapPanelAxis(it, pn, axis) {
+  const ps = (it.params.panels || []).filter(p => p !== pn);
+  const b = panelBox(pn);
+  if (!b) return;
+  const tol = 0.9;
+  const faces = [];
+  for (const o of ps) {
+    const ob = panelBox(o);
+    if (!ob) continue;
+    if (axis === 'x') faces.push(ob.x0, ob.x1);
+    else if (axis === 'y') faces.push(ob.y0, ob.y1);
+    else faces.push(ob.z0, ob.z1);
+  }
+  if (axis === 'y') faces.push(0);
+  const e0 = axis === 'x' ? b.x0 : axis === 'y' ? b.y0 : b.z0;
+  const e1 = axis === 'x' ? b.x1 : axis === 'y' ? b.y1 : b.z1;
+  let best = null;
+  for (const f of faces) {
+    for (const e of [e0, e1]) {
+      const d = f - e;
+      if (Math.abs(d) <= tol && (!best || Math.abs(d) < Math.abs(best))) best = d;
+    }
+  }
+  if (best !== null) pn[axis] = r1(pn[axis] + best);
+}
+
 function bind3D() {
   const cvs = $('#c3d');
   let cd = null;
+  let pdrag = null;
   const ptrs = new Map();
   let pinch3 = null;
   cvs.addEventListener('contextmenu', e => e.preventDefault());
@@ -2722,9 +2812,38 @@ function bind3D() {
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (ptrs.size === 2) {
       cd = null;
+      pdrag = null;
       const [a, b] = [...ptrs.values()];
       pinch3 = { d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), dist0: state.cam.dist };
       return;
+    }
+    /* clic gauche simple : on essaie d'attraper un panneau du meuble sur mesure */
+    if (e.button === 0 && !e.shiftKey && !e.altKey) {
+      const coarse = e.pointerType !== 'mouse';
+      const rect = cvs.getBoundingClientRect();
+      const hit = pickPanel3D(cvs, e.clientX - rect.left, e.clientY - rect.top);
+      if (hit) {
+        const already = state.sel === hit.it.id;
+        if (!already) select(hit.it.id);
+        if (hit.id && (!coarse || already)) {
+          const idx = hit.it.params.panels.findIndex(p => p.id === hit.id);
+          if (idx >= 0) {
+            const pn = hit.it.params.panels[idx];
+            panelSel = idx;
+            renderSel();
+            beginEdit();
+            pdrag = {
+              it: hit.it, pn: pn,
+              cam: makeCam(cvs.clientWidth || 800, cvs.clientHeight || 600),
+              sx: e.clientX, sy: e.clientY,
+              x0: pn.x, y0: pn.y, z0: pn.z, moved: false
+            };
+            cvs.style.cursor = 'move';
+            draw();
+            return;
+          }
+        }
+      }
     }
     cd = {
       x: e.clientX, y: e.clientY, yaw: state.cam.yaw, pitch: state.cam.pitch,
@@ -2739,6 +2858,20 @@ function bind3D() {
       const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
       state.cam.dist = clamp(pinch3.dist0 * (pinch3.d0 / d), 60, 12000);
       draw();
+      return;
+    }
+    if (pdrag) {
+      const mdx = e.clientX - pdrag.sx, mdy = e.clientY - pdrag.sy;
+      if (Math.hypot(mdx, mdy) > 2) pdrag.moved = true;
+      const ax = dragAxis3D(pdrag.it, pdrag.pn, pdrag.cam, mdx, mdy);
+      if (ax) {
+        let v = pdrag[ax.k + '0'] + (mdx * ax.sx + mdy * ax.sy) / ax.n2;
+        if (!e.altKey) v = Math.round(v * 2) / 2;
+        pdrag.pn[ax.k] = r1(v);
+        if (state.snap && !e.altKey) snapPanelAxis(pdrag.it, pdrag.pn, ax.k);
+        invalidateParts(pdrag.it.id);
+        draw(); updateStatus();
+      }
       return;
     }
     if (!cd) return;
@@ -2760,6 +2893,15 @@ function bind3D() {
   const up = e => {
     if (e && e.pointerId != null) ptrs.delete(e.pointerId);
     if (ptrs.size < 2) pinch3 = null;
+    if (pdrag) {
+      const it = pdrag.it, moved = pdrag.moved;
+      pdrag = null;
+      cvs.style.cursor = '';
+      if (moved) normalizeCustom(it);
+      endEdit();
+      renderSel(); draw(); renderTotals(); autosave();
+      return;
+    }
     if (cd) { cd = null; autosave(); }
   };
   cvs.addEventListener('pointerup', up);
@@ -3082,6 +3224,8 @@ function helpHtml() {
     '<li>Toutes les cotes sont en <b>centimètres</b> (largeur, profondeur, hauteur, élévation).</li>' +
     '<li>Les champs du panneau de droite sont modifiables : les paramètres (portes, tiroirs, étagères, épaisseurs) reconstruisent le meuble.</li>' +
     '<li><b>Meuble sur mesure</b> (catégorie Structures) : le meuble se compose <b>panneau par panneau</b> — joues, dessus, dessous, fond, tablettes, portes, pieds ou panneau libre. Chaque panneau a sa longueur, sa largeur, son épaisseur et sa position en cm ; l’encombrement du meuble se calcule tout seul.</li>' +
+    '<li><b>Déplacer un panneau à la souris (vue 3D)</b> : clique sur une joue, un dessous, une tablette… et fais-la glisser. Elle suit le geste sur l’axe le plus naturel (elle glisse, elle ne pivote pas) et se <b>colle toute seule</b> aux faces voisines et au sol (aimant de 0,9 cm). <b>Alt</b> = sans aimant ni arrondi. Sur mobile : touche une fois pour sélectionner le meuble, puis fais glisser.</li>' +
+    '<li><b>Coller un panneau au bord</b> : panneau sélectionné → boutons <b>◀ Gauche / Droite ▶</b> (ou Dessous / Dessus, Fond / Avant selon son orientation). Les panneaux déjà collés aux bords suivent automatiquement quand l’encombrement change.</li>' +
     '<li>Une poignée au-dessus de la sélection permet de faire pivoter librement (pas de 5°).</li>' +
     '<li>Les cotes affichées sur le plan sont celles du meuble sélectionné.</li>' +
     '<li><b>Débit &amp; quantités</b> calcule la liste des panneaux, les m², le chant et le volume.</li>' +
