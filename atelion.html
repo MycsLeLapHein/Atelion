@@ -433,7 +433,7 @@ input[type=text]:focus,input[type=date]:focus,select:focus{border-color:var(--ac
           <button class="btn" data-cam="iso" title="Vue isométrique">Iso</button>
           <button class="btn" data-cam="top" title="Vue de dessus">Dessus</button>
           <button class="btn" data-cam="front" title="Vue de face">Face</button>
-          <button class="btn" id="grabTgl" title="Attraper les panneaux à la souris (cliquer-glisser). Désactivé : le glissement tourne la caméra.">✋ Panneaux : on</button>
+          <button class="btn" id="grabTgl" title="Glisser dans la 3D : sur « on », une planche se déplace ; sur « off », c'est le meuble entier. Maj + glisser = tourner la caméra.">✋ Panneaux : on</button>
           <button class="btn" id="camFit" title="Recadrer la scène">Recadrer</button>
         </div>
         <div class="hint" id="hint3d">Glisser = tourner · Maj + glisser = déplacer · molette = zoom</div>
@@ -2812,6 +2812,22 @@ function pickPanel3D(cvs, cx, cy) {
   return bestP || bestI;
 }
 
+/* point du sol (plan horizontal à la hauteur h) sous le curseur */
+function groundPoint(cvs, sx, sy, h) {
+  const W = cvs.clientWidth || 800, H = cvs.clientHeight || 600;
+  const cam = makeCam(W, H);
+  const du = (sx - cam.cx) / cam.f, dv = -(sy - cam.cy) / cam.f;
+  const dir = {
+    x: cam.fwd.x + cam.right.x * du + cam.up.x * dv,
+    y: cam.fwd.y + cam.right.y * du + cam.up.y * dv,
+    z: cam.fwd.z + cam.right.z * du + cam.up.z * dv
+  };
+  if (Math.abs(dir.y) < 1e-4) return null;
+  const t = ((h || 0) - cam.eye.y) / dir.y;
+  if (t <= 0) return null;
+  return { x: cam.eye.x + dir.x * t, z: cam.eye.z + dir.z * t };
+}
+
 /* axe local le plus aligné avec le geste (et conversion pixels -> cm) */
 function dragAxis3D(it, pn, cam, dx, dy) {
   const c = Math.cos(it.rot * RAD), s = Math.sin(it.rot * RAD);
@@ -2867,6 +2883,7 @@ function bind3D() {
   const cvs = $('#c3d');
   let cd = null;
   let pdrag = null;
+  let idrag = null;
   const ptrs = new Map();
   let pinch3 = null;
   cvs.addEventListener('contextmenu', e => e.preventDefault());
@@ -2880,15 +2897,17 @@ function bind3D() {
       pinch3 = { d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), dist0: state.cam.dist };
       return;
     }
-    /* clic gauche simple : on essaie d'attraper un panneau du meuble sur mesure */
-    if (e.button === 0 && state.grabPanels !== false && !e.shiftKey && !e.altKey) {
+    /* clic gauche simple : on attrape une planche, ou le meuble entier selon le réglage */
+    if (e.button === 0 && !e.shiftKey && !e.altKey) {
       const coarse = e.pointerType !== 'mouse';
       const rect = cvs.getBoundingClientRect();
-      const hit = pickPanel3D(cvs, e.clientX - rect.left, e.clientY - rect.top);
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const hit = pickPanel3D(cvs, cx, cy);
       if (hit) {
         const already = state.sel === hit.it.id;
         if (!already) select(hit.it.id);
-        if (hit.id && (!coarse || already)) {
+        const grabPanel = hit.id && state.grabPanels !== false && (!coarse || already);
+        if (grabPanel) {
           const idx = hit.it.params.panels.findIndex(p => p.id === hit.id);
           if (idx >= 0) {
             const pn = hit.it.params.panels[idx];
@@ -2903,6 +2922,16 @@ function bind3D() {
             };
             cvs.style.cursor = 'move';
             draw();
+            return;
+          }
+        }
+        /* sinon : on déplace le meuble entier dans la pièce */
+        if (!coarse || already) {
+          const g = groundPoint(cvs, cx, cy, hit.it.z || 0);
+          if (g) {
+            beginEdit();
+            idrag = { it: hit.it, gx: g.x, gz: g.z, x0: hit.it.x, y0: hit.it.y, moved: false };
+            cvs.style.cursor = 'move';
             return;
           }
         }
@@ -2921,6 +2950,25 @@ function bind3D() {
       const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
       state.cam.dist = clamp(pinch3.dist0 * (pinch3.d0 / d), 60, 12000);
       draw();
+      return;
+    }
+    if (idrag) {
+      const rect = cvs.getBoundingClientRect();
+      const g = groundPoint(cvs, e.clientX - rect.left, e.clientY - rect.top, idrag.it.z || 0);
+      if (!g) return;
+      let nx = idrag.x0 + (g.x - idrag.gx);
+      let ny = idrag.y0 + (g.z - idrag.gz);
+      if (Math.hypot(nx - idrag.x0, ny - idrag.y0) > 0.5) idrag.moved = true;
+      if (state.snap && !e.altKey) {
+        const s = snapPos(idrag.it, nx, ny);
+        nx = s.x; ny = s.y; state.guides = s.guides;
+      } else {
+        state.guides = [];
+      }
+      idrag.it.x = r1(nx);
+      idrag.it.y = r1(ny);
+      invalidateParts(idrag.it.id);
+      draw(); updateStatus();
       return;
     }
     if (pdrag) {
@@ -2956,6 +3004,16 @@ function bind3D() {
   const up = e => {
     if (e && e.pointerId != null) ptrs.delete(e.pointerId);
     if (ptrs.size < 2) pinch3 = null;
+    if (idrag) {
+      const moved = idrag.moved;
+      idrag = null;
+      cvs.style.cursor = '';
+      state.guides = [];
+      endEdit();
+      if (moved) { renderItems(); renderTotals(); }
+      draw(); autosave();
+      return;
+    }
     if (pdrag) {
       const it = pdrag.it, moved = pdrag.moved;
       pdrag = null;
@@ -3106,9 +3164,13 @@ function bindPanel() {
   const gt = $('#grabTgl');
   if (gt) {
     paintGrab = () => {
-      gt.textContent = state.grabPanels === false ? '✋ Panneaux : off' : '✋ Panneaux : on';
-      gt.classList.toggle('on', state.grabPanels !== false);
-      gt.style.opacity = state.grabPanels === false ? '.55' : '';
+      const on = state.grabPanels !== false;
+      gt.textContent = on ? '✋ Panneaux : on' : '✋ Panneaux : off';
+      gt.title = on
+        ? 'Glisser sur une planche = la déplacer. Passer sur « off » pour déplacer le meuble entier. Maj + glisser = tourner la caméra.'
+        : 'Glisser sur un meuble = le déplacer entier dans la pièce. Maj + glisser (ou glisser dans le vide) = tourner la caméra.';
+      gt.classList.toggle('on', on);
+      gt.style.opacity = on ? '' : '.55';
     };
     gt.addEventListener('click', () => {
       state.grabPanels = state.grabPanels === false;
@@ -3308,7 +3370,7 @@ function helpHtml() {
     '<li>Les champs du panneau de droite sont modifiables : les paramètres (portes, tiroirs, étagères, épaisseurs) reconstruisent le meuble.</li>' +
     '<li><b>Meuble sur mesure</b> (catégorie Structures) : le meuble se compose <b>panneau par panneau</b> — joues, dessus, dessous, fond, tablettes, portes, pieds ou panneau libre. Chaque panneau a sa longueur, sa largeur, son épaisseur et sa position en cm ; l’encombrement du meuble se calcule tout seul.</li>' +
     '<li><b>Déplacer un panneau à la souris (vue 3D)</b> : clique sur une joue, un dessous, une tablette… et fais-la glisser. Elle suit le geste sur l’axe le plus naturel (elle glisse, elle ne pivote pas) et se <b>colle toute seule</b> aux faces voisines et au sol (aimant de 0,9 cm). <b>Alt</b> = sans aimant ni arrondi. Sur mobile : touche une fois pour sélectionner le meuble, puis fais glisser.</li>' +
-    '<li><b>✋ Panneaux : on / off</b> (bouton dans la vue 3D, ou touche <b>P</b>) : sur « off », le clic-glisser ne prend plus les panneaux et tourne simplement la caméra. Pratique pour visiter le meuble sans rien déplacer par erreur.</li>' +
+    '<li><b>✋ Panneaux : on / off</b> (bouton dans la vue 3D, ou touche <b>P</b>) : sur <b>on</b>, cliquer-glisser sur une planche la déplace ; sur <b>off</b>, cliquer-glisser sur un meuble le déplace <b>entier</b> dans la pièce (accrochage aux murs et aux autres meubles, comme en 2D). Cliquer dans le vide, ou <b>Maj + glisser</b>, tourne la caméra dans les deux cas.</li>' +
     '<li><b>Coller un panneau au bord</b> : panneau sélectionné → boutons <b>◀ Gauche / Droite ▶</b> (ou Dessous / Dessus, Fond / Avant selon son orientation). Les panneaux déjà collés aux bords suivent automatiquement quand l’encombrement change.</li>' +
     '<li>Une poignée au-dessus de la sélection permet de faire pivoter librement (pas de 5°).</li>' +
     '<li>Les cotes affichées sur le plan sont celles du meuble sélectionné.</li>' +
