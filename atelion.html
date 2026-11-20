@@ -6,8 +6,12 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Atelion">
 <meta name="theme-color" content="#f6f0e6">
 <title>Atelion — Plans 2D / 3D de menuiserie (cm)</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Crect width='96' height='96' rx='22' fill='%23111111'/%3E%3Cpath d='M48 12L84 84L64 84L48 36L32 84L12 84Z' fill='%23F1E9DC'/%3E%3Crect x='30' y='63' width='36' height='9' fill='%23F1E9DC'/%3E%3C/svg%3E">
 <style>
 *{box-sizing:border-box}
@@ -3380,6 +3384,7 @@ function helpHtml() {
     '<li>Les champs du panneau de droite sont modifiables : les paramètres (portes, tiroirs, étagères, épaisseurs) reconstruisent le meuble.</li>' +
     '<li><b>Meuble sur mesure</b> (catégorie Structures) : le meuble se compose <b>panneau par panneau</b> — joues, dessus, dessous, fond, tablettes, portes, pieds ou panneau libre. Chaque panneau a sa longueur, sa largeur, son épaisseur et sa position en cm ; l’encombrement du meuble se calcule tout seul.</li>' +
     '<li><b>Déplacer un panneau à la souris (vue 3D)</b> : clique sur une joue, un dessous, une tablette… et fais-la glisser. Elle suit le geste sur l’axe le plus naturel (elle glisse, elle ne pivote pas) et se <b>colle toute seule</b> aux faces voisines et au sol (aimant de 0,9 cm). <b>Alt</b> = sans aimant ni arrondi. Sur mobile : touche une fois pour sélectionner le meuble, puis fais glisser.</li>' +
+    '<li><b>Installer sur le téléphone</b> : ouvre l’adresse de l’appli dans Chrome (en <b>https</b>, donc l’adresse GitHub Pages), puis menu <b>⋮ → Installer l’application</b> (ou « Ajouter à l’écran d’accueil »). L’icône Atelion s’ajoute comme une vraie appli, en plein écran, et elle fonctionne aussi <b>hors ligne</b>.</li>' +
     '<li><b>✋ Panneaux : on / off</b> (bouton dans la vue 3D, ou touche <b>P</b>) : sur <b>on</b>, cliquer-glisser sur une planche la déplace ; sur <b>off</b>, cliquer-glisser sur un meuble le déplace <b>entier</b> dans la pièce (accrochage aux murs et aux autres meubles, comme en 2D). Cliquer dans le vide, ou <b>Maj + glisser</b>, tourne la caméra dans les deux cas.</li>' +
     '<li><b>Coller un panneau au bord</b> : panneau sélectionné → boutons <b>◀ Gauche / Droite ▶</b> (ou Dessous / Dessus, Fond / Avant selon son orientation). Les panneaux déjà collés aux bords suivent automatiquement quand l’encombrement change.</li>' +
     '<li>Une poignée au-dessus de la sélection permet de faire pivoter librement (pas de 5°).</li>' +
@@ -4026,6 +4031,16 @@ window.addEventListener('m3d:change', () => {
 });
 
 bootFirebase();
+</script>
+<script>
+/* installation sur le téléphone (PWA) : le service worker rend la page installable */
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  if (!/^https?:/.test(location.protocol)) return;
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  });
+})();
 </script>
 </body>
 </html>
