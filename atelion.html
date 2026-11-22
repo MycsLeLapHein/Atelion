@@ -1942,8 +1942,9 @@ function renderSel() {
     const v = p[pd.key] != null ? p[pd.key] : pd.def;
     return '<div class="fld"><span>' + esc(pd.label) + '</span><div class="uw"><input type="number" data-p="' + pd.key + '" step="' + pd.step + '" min="' + pd.min + '" max="' + pd.max + '" value="' + numDot(v) + '"><i>' + (pd.unit || '') + '</i></div></div>';
   }).join('');
+  const cdField = (lab, k) => '<div class="fld"><span>' + lab + '</span><div class="uw"><input type="number" data-cd="' + k + '" step="0.1" min="2" value="' + numDot(it[k]) + '"><i>cm</i></div></div>';
   const dims = custom
-    ? '<div class="info">Encombrement : <b>' + num(it.w) + ' × ' + num(it.d) + ' × ' + num(it.h) + ' cm</b><br>Étire le meuble par les poignées du plan : les panneaux suivent et gardent leur épaisseur.</div><div class="g3">' + fieldHtml('Position X', 'x', it.x) + fieldHtml('Position Y', 'y', it.y) + fieldHtml('Élévation', 'z', it.z || 0) + '</div><div class="g2" style="margin-top:6px">' + fieldHtml('Rotation', 'rot', it.rot, 1, '°') + '</div>'
+    ? '<div class="g3" style="margin-top:2px">' + cdField('Largeur', 'w') + cdField('Profondeur', 'd') + cdField('Hauteur', 'h') + '</div><div class="info">Tape une cote (Entrée) : tous les panneaux s’adaptent et gardent leur épaisseur. Tu peux aussi étirer par les poignées du plan.</div><div class="g3">' + fieldHtml('Position X', 'x', it.x) + fieldHtml('Position Y', 'y', it.y) + fieldHtml('Élévation', 'z', it.z || 0) + '</div><div class="g2" style="margin-top:6px">' + fieldHtml('Rotation', 'rot', it.rot, 1, '°') + '</div>'
     : '<div class="g3">' + fieldHtml((def.labels && def.labels.w) || 'Largeur', 'w', it.w) + fieldHtml((def.labels && def.labels.d) || 'Profondeur', 'd', it.d) + fieldHtml((def.labels && def.labels.h) || 'Hauteur', 'h', it.h) + '</div>' +
       '<div class="g3" style="margin-top:6px">' + fieldHtml('Position X', 'x', it.x) + fieldHtml('Position Y', 'y', it.y) + fieldHtml('Élévation', 'z', it.z || 0) + '</div><div class="g2" style="margin-top:6px">' + fieldHtml('Rotation', 'rot', it.rot, 1, '°') + '</div>';
   const standable = !custom && Math.min(it.w, it.h, it.d) <= 4 && Math.max(it.h, it.d) >= 8;
@@ -1985,7 +1986,7 @@ function fieldResize(it, k, v) {
 function syncSelFields() {
   const it = curItem(); if (!it) return;
   $$('#selBody input[data-k]').forEach(inp => { if (document.activeElement !== inp) { const v = it[inp.dataset.k]; if (v != null) inp.value = numDot(v); } });
-  if (isCustom(it)) { const inf = $('#selBody .info'); if (inf) inf.innerHTML = 'Encombrement : <b>' + num(it.w) + ' × ' + num(it.d) + ' × ' + num(it.h) + ' cm</b><br>Étire le meuble par les poignées du plan : les panneaux suivent et gardent leur épaisseur.'; syncPanelFields(it); }
+  if (isCustom(it)) { $$('#selBody input[data-cd]').forEach(inp => { if (document.activeElement !== inp) inp.value = numDot(it[inp.dataset.cd]); }); syncPanelFields(it); }
 }
 function syncSelPos() {
   const it = curItem(); if (!it) return;
@@ -2019,8 +2020,7 @@ function customHtml(it) {
     '<button class="btn sm" data-pact="e0">◀ ' + edge[0] + '</button><button class="btn sm" data-pact="e1">' + edge[1] + ' ▶</button>' +
     '<button class="btn sm" data-pact="ctr">Centrer</button><button class="btn sm bad" data-pact="del">Supprimer</button></div>' +
     '<div class="fld" style="margin-top:8px"><span>Remplacer ce panneau par…</span><select id="pnRepl"><option value="">— choisir —</option>' + PRESETS.filter(x => x[0] !== 'pieds').map(x => '<option value="' + x[0] + '">' + x[1] + '</option>').join('') + '</select></div></div>' : '';
-  return '<div class="g2" style="margin-top:10px"><div class="fld"><span>Hauteur du meuble</span><div class="uw"><input type="number" id="custH" step="1" min="5" value="' + numDot(it.h) + '"><i>cm</i></div></div>' +
-    '<div class="fld"><span>Épaisseur par défaut</span><div class="uw"><input type="number" data-p="t" step="0.1" min="0.6" max="5" value="' + numDot(it.params.t || 1.8) + '"><i>cm</i></div></div></div>' +
+  return '<div class="g2" style="margin-top:10px"><div class="fld"><span>Épaisseur par défaut</span><div class="uw"><input type="number" data-p="t" step="0.1" min="0.6" max="5" value="' + numDot(it.params.t || 1.8) + '"><i>cm</i></div></div></div>' +
     '<div class="pbox"><div class="ph">Panneaux (' + ps.length + ')</div><div class="list" id="pList">' + rows + '</div></div>' +
     '<div class="addgrid">' + PRESETS.map(([k, l]) => '<button class="btn sm" data-add="' + k + '">+ ' + l + '</button>').join('') + '<button class="btn sm bad" data-add="vider">Tout effacer</button></div>' + edit;
 }
@@ -2043,6 +2043,19 @@ function bindCustom(it) {
   const ps = () => it.params.panels;
   const cur = () => ps()[state.panelSel];
   $$('#pList .li').forEach(r => r.addEventListener('click', () => { state.panelSel = parseInt(r.dataset.pi, 10) || 0; geomDirty = true; renderSel(); draw(); }));
+  $$('#selBody input[data-cd]').forEach(inp => {
+    const apply = () => {
+      const k = inp.dataset.cd, v = parseN(inp.value);
+      if (!isFinite(v)) { inp.value = numDot(it[k]); return; }
+      const nv = clamp(v, 2, 2000); if (Math.abs(nv - it[k]) < 0.005) { inp.value = numDot(it[k]); return; }
+      ck();
+      if (k === 'h') it.params.panels = stretchPanelsY(it.params.panels, it.h, nv);
+      else it.params.panels = stretchPanels(it.params.panels, it.w, it.d, k === 'w' ? nv : it.w, k === 'd' ? nv : it.d, 1, 1);
+      normalizeCustom(it); invalidateParts(it.id); changed(); renderSel();
+    };
+    inp.addEventListener('change', apply);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+  });
   const ch = $('#custH');
   if (ch) ch.addEventListener('change', () => {
     const v = parseN(ch.value); if (!isFinite(v)) return; const nH = clamp(v, 5, 2000);
