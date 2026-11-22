@@ -9,7 +9,7 @@
       "**/node_modules/**"
     ],
     "rewrites": [
-      { "source": "/", "destination": "/menuiserie-3d.html" }
+      { "source": "/", "destination": "/atelion.html" }
     ],
     "headers": [
       {
