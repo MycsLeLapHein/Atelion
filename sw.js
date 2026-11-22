@@ -1,6 +1,6 @@
 /* Atelion — service worker : rend l'application installable et utilisable hors ligne.
    Stratégie : réseau d'abord (pour toujours avoir la dernière version), cache en secours. */
-const CACHE = 'atelion-v1';
+const CACHE = 'atelion-v2';
 const ASSETS = [
   './atelion.html',
   './index.html',

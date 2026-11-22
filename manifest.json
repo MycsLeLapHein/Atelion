@@ -8,17 +8,43 @@
   "scope": "./",
   "id": "./atelion.html",
   "display": "standalone",
-  "display_override": ["standalone", "fullscreen", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "fullscreen",
+    "minimal-ui"
+  ],
   "orientation": "any",
-  "background_color": "#f6f0e6",
-  "theme_color": "#f6f0e6",
-  "categories": ["productivity", "utilities", "design"],
+  "background_color": "#14130f",
+  "theme_color": "#14130f",
+  "categories": [
+    "productivity",
+    "utilities",
+    "design"
+  ],
   "icons": [
-    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ],
   "shortcuts": [
-    { "name": "Nouveau plan", "url": "./atelion.html" }
+    {
+      "name": "Nouveau plan",
+      "url": "./atelion.html"
+    }
   ]
 }

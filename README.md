@@ -83,3 +83,8 @@ Si vous activez le cloud, vos plans sont enregistrés dans **votre** projet Fire
 ---
 
 © Atelion — menuiserie & agencement. Code fourni pour un usage personnel ; pas de licence de redistribution.
+
+
+## Version 2
+
+Interface refaite : plan 2D canvas, vue 3D WebGL (ombres, arêtes, sélection par rayon), bouton « Remplacer » pour changer la forme d'un meuble ou d'un panneau. Les projets `.json` existants restent compatibles ; Firebase (compte Google + Firestore) et l'installation en application (PWA) sont conservés.
