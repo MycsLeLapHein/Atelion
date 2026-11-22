@@ -274,6 +274,7 @@ table.t tr.tot td{font-weight:700;border-top:2px solid var(--line2);color:var(--
       </div>
       <div class="pane" id="p3">
         <canvas class="cv" id="c3" tabindex="0"></canvas>
+        <canvas class="cv" id="o3" style="pointer-events:none"></canvas>
         <div id="nogl">WebGL est désactivé sur cet appareil : la vue 3D n'est pas disponible, le plan 2D fonctionne normalement.</div>
         <div class="tag">Vue 3D</div>
         <div class="ovl">
@@ -1135,7 +1136,7 @@ function draw2D(ctx, W, H, ex) {
 function polyPath(ctx, pts) { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); }
 function drawItem2D(ctx, it, ex) {
   const hex = colorOf(it), parts = getParts(it).slice().sort((p, q) => p.y1 - q.y1);
-  const sel = it.id === state.sel;
+  const sel = it.id === state.sel; let pnLabel = null;
   for (const p of parts) {
     if (p.k === 'b') {
       const pts = [[p.x0, p.z0], [p.x1, p.z0], [p.x1, p.z1], [p.x0, p.z1]].map(([x, zz]) => { const w = toPlan(it, x, zz); return w2s(w.x, w.y); });
@@ -1145,6 +1146,8 @@ function drawItem2D(ctx, it, ex) {
       ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 1; ctx.stroke();
       if (!ex && sel && isCustom(it) && p.pn && it.params.panels[state.panelSel] && it.params.panels[state.panelSel].id === p.pn) {
         ctx.strokeStyle = '#ff9d2e'; ctx.lineWidth = 2.5; ctx.stroke();
+        const cc = toPlan(it, (p.x0 + p.x1) / 2, (p.z0 + p.z1) / 2), sc = w2s(cc.x, cc.y), tx = num(r1(p.x1 - p.x0)) + ' × ' + num(r1(p.z1 - p.z0)) + ' · h ' + num(r1(p.y1 - p.y0));
+        pnLabel = { sc, tx };
       }
     } else {
       const c = toPlan(it, p.cx, p.cz), s = w2s(c.x, c.y);
@@ -1152,6 +1155,11 @@ function drawItem2D(ctx, it, ex) {
       ctx.fillStyle = shade(p.hex || hex, clamp((p.m || 1) * 0.95, 0.5, 1.2)); ctx.fill();
       ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 1; ctx.stroke();
     }
+  }
+  if (pnLabel) {
+    const { sc, tx } = pnLabel; ctx.save(); ctx.font = '600 11px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(tx).width + 8; ctx.fillStyle = 'rgba(20,19,15,.92)'; ctx.fillRect(sc.x - tw / 2, sc.y - 8, tw, 16);
+    ctx.fillStyle = '#ffb866'; ctx.fillText(tx, sc.x, sc.y); ctx.restore();
   }
   /* contour du meuble */
   const out = [[-it.w / 2, -it.d / 2], [it.w / 2, -it.d / 2], [it.w / 2, it.d / 2], [-it.w / 2, it.d / 2]].map(([x, zz]) => { const w = toPlan(it, x, zz); return w2s(w.x, w.y); });
@@ -1779,6 +1787,47 @@ function bind3D() {
   cv.addEventListener('wheel', e => { e.preventDefault(); state.cam.dist = clamp(state.cam.dist * Math.exp(e.deltaY * 0.0012), 15, 15000); draw(); }, { passive: false });
 }
 
+/* ---------- cotes du panneau sélectionné (calque 3D) ---------- */
+const o3 = $('#o3');
+function drawOverlay3() {
+  const pr = prep(o3); if (!pr) return;
+  const { ctx, W, H } = pr; ctx.clearRect(0, 0, W, H);
+  const it = curItem();
+  if (!it || !isCustom(it) || it.visible === false || drag3 && drag3.mode === 'orbit') return;
+  const pn = it.params.panels[state.panelSel]; if (!pn) return;
+  const b = panelBox(pn); if (!b) return;
+  const cb = camBasis(), c = Math.cos(it.rot * RAD), s = Math.sin(it.rot * RAD);
+  const Wp = (x, y, z) => [it.x + x * c - z * s, (it.z || 0) + y, it.y + x * s + z * c];
+  const P = (x, y, z) => proj3(cb, W, H, Wp(x, y, z));
+  const cen = P((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2); if (!cen) return;
+  const lo = [b.x0, b.y0, b.z0], hi = [b.x1, b.y1, b.z1], names = ['Longueur', 'Hauteur', 'Profondeur'];
+  const lab = (x, y, txt, col) => {
+    ctx.font = '600 12px system-ui,sans-serif'; const tw = ctx.measureText(txt).width + 10;
+    ctx.fillStyle = 'rgba(20,19,15,.92)'; ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - tw / 2, y - 9, tw, 18, 5) : ctx.rect(x - tw / 2, y - 9, tw, 18); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(txt, x, y + 0.5);
+  };
+  const cols = ['#ffb866', '#8fd18a', '#7fc0ff'];
+  for (let a = 0; a < 3; a++) {
+    const len = hi[a] - lo[a]; if (len < 0.05) continue;
+    let best = null;
+    for (let m = 0; m < 4; m++) {
+      const o = [0, 1, 2].filter(k => k !== a), i0 = m & 1, i1 = (m >> 1) & 1, A = [0, 0, 0], B = [0, 0, 0];
+      A[a] = lo[a]; B[a] = hi[a]; A[o[0]] = B[o[0]] = i0 ? hi[o[0]] : lo[o[0]]; A[o[1]] = B[o[1]] = i1 ? hi[o[1]] : lo[o[1]];
+      const pa = P(...A), pb = P(...B); if (!pa || !pb) continue;
+      const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2, d = Math.hypot(mx - cen.x, my - cen.y);
+      if (!best || d > best.d) best = { pa, pb, mx, my, d };
+    }
+    if (!best) continue;
+    let nx = best.mx - cen.x, ny = best.my - cen.y; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+    const off = 14, ax = best.pa.x + nx * off, ay = best.pa.y + ny * off, bx = best.pb.x + nx * off, by = best.pb.y + ny * off;
+    ctx.strokeStyle = cols[a]; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(best.pa.x, best.pa.y); ctx.lineTo(ax + nx * 4, ay + ny * 4); ctx.moveTo(best.pb.x, best.pb.y); ctx.lineTo(bx + nx * 4, by + ny * 4); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    lab((ax + bx) / 2 + nx * 12, (ay + by) / 2 + ny * 12, num(r1(len)) + ' cm', cols[a]);
+  }
+  lab(cen.x, cen.y - 0, pn.name + ' · ' + num(r1(b.x1 - b.x0)) + ' × ' + num(r1(b.y1 - b.y0)) + ' × ' + num(r1(b.z1 - b.z0)), '#ffffff');
+}
+
 /* ==========================================================================
    DRAW, REFRESH
    ========================================================================== */
@@ -1789,7 +1838,7 @@ function paint() {
     const p = prep(c2);
     if (p) { if (_fit2) { fitView2(p.W, p.H, state.v2); _fit2 = false; } draw2D(p.ctx, p.W, p.H, false); $('#sZoom').textContent = 'Zoom ' + Math.round(state.v2.zoom * 100) + ' %'; }
   }
-  if (state.view !== '2d') render3();
+  if (state.view !== '2d') { render3(); drawOverlay3(); }
 }
 function liveChange(refreshFields) {
   geomDirty = true;
