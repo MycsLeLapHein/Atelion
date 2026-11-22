@@ -278,11 +278,11 @@ table.t tr.tot td{font-weight:700;border-top:2px solid var(--line2);color:var(--
         <div class="tag">Vue 3D</div>
         <div class="ovl">
           <button class="btn" data-cam="iso">Iso</button><button class="btn" data-cam="top">Dessus</button><button class="btn" data-cam="front">Face</button>
-          <button class="btn" data-cam="side">Côté</button>
+          <button class="btn" data-cam="side">Côté</button><button class="btn" data-cam="under" title="Vue de dessous, sous le sol">Dessous</button>
           <button class="btn on" id="tGrab" title="Sur « panneaux » : glisser une planche la déplace. Sur « meuble » : glisser déplace le meuble entier. Maj + glisser = caméra (P)">✋ Panneaux</button>
           <button class="btn" id="cFit">Recadrer</button>
         </div>
-        <div class="hint">Glisser = tourner · clic droit / Maj = déplacer la vue · molette = zoom</div>
+        <div class="hint">Glisser = tourner (même sous le sol) · Maj / clic droit = déplacer la vue · molette = zoom · double-clic = centrer sur un meuble</div>
       </div>
     </div>
     <div id="selbar">
@@ -1544,7 +1544,7 @@ function fit3() {
 }
 function setCam(name) {
   const c = state.cam;
-  const P = { iso: [0.72, 0.42], top: [0, 1.5], front: [0, 0.06], side: [Math.PI / 2, 0.06] }[name];
+  const P = { iso: [0.72, 0.42], top: [0, 1.5], front: [0, 0.06], side: [Math.PI / 2, 0.06], under: [0.72, -0.75] }[name];
   if (!P) return; c.yaw = P[0]; c.pitch = P[1]; draw();
 }
 
@@ -1573,10 +1573,11 @@ function render3(w, h) {
     gl.enableVertexAttribArray(loc('aC')); gl.vertexAttribPointer(loc('aC'), 3, gl.FLOAT, false, 36, 24);
     gl.uniformMatrix4fv(gl.getUniformLocation(GP.scene, 'uVP'), false, vp);
   };
-  useScene(GB.floor); gl.drawArrays(gl.TRIANGLES, 0, 6);
+  const below = cb.eye[1] < 0.5;
+  if (!below) { useScene(GB.floor); gl.drawArrays(gl.TRIANGLES, 0, 6); }
 
   /* ombres planaires (pochoir : un seul assombrissement par pixel) */
-  if (state.shadows && G.ntri) {
+  if (state.shadows && G.ntri && !below) {
     const Lx = L1[0] / L1[1], Lz = L1[2] / L1[1];
     const sh = new Float32Array([1, 0, 0, 0, -Lx, 0, -Lz, 0, 0, 0, 1, 0, 0, 0.12, 0, 1]);
     gl.useProgram(GP.shadow); gl.bindBuffer(gl.ARRAY_BUFFER, GB.shadow);
@@ -1686,7 +1687,7 @@ function bind3D() {
   cv.addEventListener('pointerdown', e => {
     cv.focus({ preventScroll: true });
     const sp = evPos(cv, e); ptrs.set(e.pointerId, sp); cv.setPointerCapture(e.pointerId);
-    if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), dist0: state.cam.dist }; drag3 = null; return; }
+    if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), dist0: state.cam.dist, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, t0: Object.assign({}, state.cam.target) }; drag3 = null; return; }
     if (ptrs.size > 2) return;
     const panMode = e.button === 1 || e.button === 2 || e.shiftKey;
     if (panMode) { drag3 = { mode: 'pan', sx: sp.x, sy: sp.y, t0: Object.assign({}, state.cam.target) }; return; }
@@ -1709,13 +1710,18 @@ function bind3D() {
     const sp = evPos(cv, e); if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, sp);
     if (pinch && ptrs.size >= 2) {
       const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
-      state.cam.dist = clamp(pinch.dist0 * pinch.d0 / Math.max(10, d), 60, 12000); draw(); return;
+      state.cam.dist = clamp(pinch.dist0 * pinch.d0 / Math.max(10, d), 15, 15000);
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, cb = camBasis(), k = state.cam.dist * FOVH * 2 / H(), t0 = pinch.t0;
+      state.cam.target.x = t0.x - (cb.r[0] * (mx - pinch.mx) - cb.u[0] * (my - pinch.my)) * k;
+      state.cam.target.y = t0.y - (cb.r[1] * (mx - pinch.mx) - cb.u[1] * (my - pinch.my)) * k;
+      state.cam.target.z = t0.z - (cb.r[2] * (mx - pinch.mx) - cb.u[2] * (my - pinch.my)) * k;
+      draw(); return;
     }
     if (!drag3) { if (e.buttons === 0) { const h = pick3(sp.x, sp.y); cv.style.cursor = h ? (state.grab && isCustom(h.item) ? 'grab' : 'move') : 'default'; } return; }
     const d = drag3, dx = sp.x - d.sx, dy = sp.y - d.sy, cam = state.cam;
     if (d.mode === 'orbit') {
       if (Math.hypot(dx, dy) > 3) { d.click = false; d.tapSel = null; }
-      cam.yaw = d.yaw - dx * 0.008; cam.pitch = clamp(d.pitch + dy * 0.006, 0.02, 1.52); draw();
+      cam.yaw = d.yaw - dx * 0.008; cam.pitch = clamp(d.pitch + dy * 0.006, -1.55, 1.55); draw();
     } else if (d.mode === 'pan') {
       const cb = camBasis(), k = cam.dist * FOVH * 2 / H();
       cam.target.x = d.t0.x - (cb.r[0] * dx - cb.u[0] * dy) * k;
@@ -1764,7 +1770,13 @@ function bind3D() {
     if (d.mode === 'item' && !d.moved && d.tapSel) select(d.it.id);
   };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
-  cv.addEventListener('wheel', e => { e.preventDefault(); state.cam.dist = clamp(state.cam.dist * Math.exp(e.deltaY * 0.0012), 60, 12000); draw(); }, { passive: false });
+  cv.addEventListener('dblclick', e => {
+    const sp = evPos(cv, e), h = pick3(sp.x, sp.y); if (!h) return;
+    const it = h.item, a = Math.cos(it.rot * RAD), b = Math.sin(it.rot * RAD);
+    state.cam.target = { x: it.x, y: (it.z || 0) + it.h / 2, z: it.y };
+    state.cam.dist = clamp(Math.max(it.w, it.d, it.h) * 2.6, 40, 15000); draw();
+  });
+  cv.addEventListener('wheel', e => { e.preventDefault(); state.cam.dist = clamp(state.cam.dist * Math.exp(e.deltaY * 0.0012), 15, 15000); draw(); }, { passive: false });
 }
 
 /* ==========================================================================
@@ -2179,7 +2191,7 @@ function printSheet() {
 }
 function helpHtml() {
   return '<div class="help"><div><h4>Créer</h4><ul><li>Clique une forme de la bibliothèque : elle arrive au centre de la pièce, sélectionnée.</li><li><b>Meuble sur mesure</b> : on assemble panneau par panneau (joues, dessus, dessous, fond, tablettes, portes, pieds, panneau libre). Chaque panneau a L × l × ép. et une position en cm.</li><li>Toutes les cotes sont en <b>centimètres</b> et modifiables dans le panneau de droite.</li></ul></div>' +
-    '<div><h4>Déplacer · pivoter · étirer</h4><ul><li><b>Plan 2D</b> : glisser un meuble le déplace (accroche au cm, aux murs et aux autres meubles, <span class="kbd">Alt</span> = libre). Les 8 poignées étirent ; la poignée ↻ pivote par pas de 5° (<span class="kbd">Maj</span> = 15°).</li><li><b>Vue 3D</b> : glisser une planche la déplace sur l’axe le plus naturel avec aimant sur les faces voisines et le sol. Le bouton ✋ passe en mode « meuble entier ». <span class="kbd">Maj</span> + glisser ou clic droit = déplacer la caméra.</li><li>Flèches = 1 cm (<span class="kbd">Maj</span> = 10 cm).</li></ul></div>' +
+    '<div><h4>Déplacer · pivoter · étirer</h4><ul><li><b>Plan 2D</b> : glisser un meuble le déplace (accroche au cm, aux murs et aux autres meubles, <span class="kbd">Alt</span> = libre). Les 8 poignées étirent ; la poignée ↻ pivote par pas de 5° (<span class="kbd">Maj</span> = 15°).</li><li><b>Vue 3D</b> : glisser une planche la déplace sur l’axe le plus naturel avec aimant sur les faces voisines et le sol. Le bouton ✋ passe en mode « meuble entier ». <span class="kbd">Maj</span> + glisser ou clic droit = déplacer la caméra dans tous les sens (haut, bas, côtés) ; on peut passer sous le sol (bouton Dessous) ; double-clic sur un meuble = centrer la caméra dessus.</li><li>Flèches = 1 cm (<span class="kbd">Maj</span> = 10 cm).</li></ul></div>' +
     '<div><h4>Remplacer</h4><ul><li><b>⇄ / Remplacer…</b> : choisis une autre forme, le meuble garde sa position, sa rotation et sa finition.</li><li>Dans un meuble sur mesure, <b>Remplacer ce panneau par…</b> échange un panneau contre un autre type ajusté à l’encombrement.</li><li>Une pastille de finition change la matière d’un clic.</li></ul></div>' +
     '<div><h4>Clavier</h4><ul><li><span class="kbd">Ctrl</span>+<span class="kbd">Z</span> / <span class="kbd">Y</span> annuler / rétablir · <span class="kbd">R</span> pivoter · <span class="kbd">D</span> dupliquer · <span class="kbd">Suppr</span></li><li><span class="kbd">F</span> recadrer · <span class="kbd">1</span> <span class="kbd">2</span> <span class="kbd">3</span> changer de vue · <span class="kbd">P</span> panneaux / meuble</li><li><span class="kbd">Ctrl</span>+<span class="kbd">S</span> enregistrer · <span class="kbd">Ctrl</span>+<span class="kbd">O</span> ouvrir · <span class="kbd">Échap</span></li></ul></div></div>';
 }
